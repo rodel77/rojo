@@ -40,6 +40,9 @@ enum SourceProjectNode {
     SyncPoint {
         #[serde(rename = "$path")]
         path: String,
+
+        #[serde(flatten)]
+        children: HashMap<String, SourceProjectNode>,
     }
 }
 
@@ -62,7 +65,13 @@ impl SourceProjectNode {
                     },
                 })
             },
-            SourceProjectNode::SyncPoint { path: source_path } => {
+            SourceProjectNode::SyncPoint { path: source_path, mut children } => {
+                let mut new_children = HashMap::new();
+
+                for (node_name, node) in children.drain() {
+                    new_children.insert(node_name, node.into_project_node(project_file_location));
+                }
+
                 let path = if Path::new(&source_path).is_absolute() {
                     PathBuf::from(source_path)
                 } else {
@@ -72,6 +81,7 @@ impl SourceProjectNode {
 
                 ProjectNode::SyncPoint(SyncPointProjectNode {
                     path,
+                    children: new_children,
                 })
             },
         }
@@ -197,16 +207,23 @@ impl ProjectNode {
                     ignore_unknown_instances: node.metadata.ignore_unknown_instances,
                 }
             },
-            ProjectNode::SyncPoint(sync_node) => {
+            ProjectNode::SyncPoint(node) => {
+                let mut children = HashMap::new();
+
+                for (key, child) in &node.children {
+                    children.insert(key.clone(), child.to_source_node(project_file_location));
+                }
+
                 let project_folder_location = project_file_location.parent().unwrap();
 
-                let friendly_path = match sync_node.path.strip_prefix(project_folder_location) {
+                let friendly_path = match node.path.strip_prefix(project_folder_location) {
                     Ok(stripped) => stripped.to_str().unwrap().replace("\\", "/"),
-                    Err(_) => format!("{}", sync_node.path.display()),
+                    Err(_) => format!("{}", node.path.display()),
                 };
 
                 SourceProjectNode::SyncPoint {
                     path: friendly_path,
+                    children,
                 }
             },
         }
@@ -226,6 +243,7 @@ pub struct InstanceProjectNode {
 #[serde(rename_all = "camelCase")]
 pub struct SyncPointProjectNode {
     pub path: PathBuf,
+    pub children: HashMap<String, ProjectNode>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -255,6 +273,7 @@ impl Project {
                     children: hashmap! {
                         String::from("Source") => ProjectNode::SyncPoint(SyncPointProjectNode {
                             path: project_folder_path.join("src"),
+                            children: HashMap::new(),
                         }),
                     },
                     properties: HashMap::new(),
@@ -300,6 +319,7 @@ impl Project {
 
         let tree = ProjectNode::SyncPoint(SyncPointProjectNode {
             path: project_folder_path.join("src"),
+            children: HashMap::new(),
         });
 
         let project = Project {

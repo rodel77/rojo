@@ -51,6 +51,7 @@ fn single_sync_point() {
     let expected_project = {
         let foo = ProjectNode::SyncPoint(SyncPointProjectNode {
             path: project_file_location.parent().unwrap().join("lib"),
+            children: HashMap::new(),
         });
 
         let mut replicated_storage_children = HashMap::new();
