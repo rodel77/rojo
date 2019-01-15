@@ -1,0 +1,9 @@
+{
+  "name": "nested-partitions",
+  "tree": {
+    "$path": "folder-a",
+    "FolderB": {
+      "$path": "folder-b"
+    }
+  }
+}

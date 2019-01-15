@@ -14,7 +14,7 @@ use rbx_tree::{RbxTree, RbxInstance, RbxValue, RbxId};
 use crate::{
     project::{Project, ProjectNode, InstanceProjectNodeMetadata},
     message_queue::MessageQueue,
-    imfs::{Imfs, ImfsItem, ImfsFile},
+    imfs::{Imfs, ImfsItem, ImfsFile, ImfsDirectory},
     path_map::PathMap,
     rbx_snapshot::{RbxSnapshotInstance, InstanceChanges, snapshot_from_tree, reify_root, reconcile_subtree},
 };
@@ -185,7 +185,7 @@ fn construct_initial_tree(
 ) -> RbxTree {
     let snapshot = construct_project_node(
         imfs,
-        &project.name,
+        Cow::Borrowed(&project.name),
         &project.tree,
         sync_point_metadata,
     );
@@ -196,23 +196,23 @@ fn construct_initial_tree(
     tree
 }
 
-fn construct_project_node<'a>(
+fn construct_project_node<'a, 'b>(
     imfs: &'a Imfs,
-    instance_name: &'a str,
-    project_node: &'a ProjectNode,
-    sync_point_metadata: &mut HashMap<PathBuf, SyncPointMetadata>,
+    instance_name: Cow<'a, str>,
+    project_node: &'b ProjectNode,
+    sync_point_metadata: &'b mut HashMap<PathBuf, SyncPointMetadata>,
 ) -> RbxSnapshotInstance<'a> {
     match project_node {
         ProjectNode::Instance(node) => {
             let mut children = Vec::new();
 
             for (child_name, child_project_node) in &node.children {
-                children.push(construct_project_node(imfs, child_name, child_project_node, sync_point_metadata));
+                children.push(construct_project_node(imfs, Cow::Owned(child_name.to_owned()), child_project_node, sync_point_metadata));
             }
 
             RbxSnapshotInstance {
-                class_name: Cow::Borrowed(&node.class_name),
-                name: Cow::Borrowed(instance_name),
+                class_name: Cow::Owned(node.class_name.clone()),
+                name: instance_name,
                 properties: node.properties.clone(),
                 children,
                 source_path: None,
@@ -225,7 +225,7 @@ fn construct_project_node<'a>(
                 .expect("Could not reify nodes from Imfs")
                 .expect("Sync point node did not result in an instance");
 
-            snapshot.name = Cow::Borrowed(instance_name);
+            snapshot.name = instance_name.clone();
             sync_point_metadata.insert(node.path.clone(), SyncPointMetadata {
                 instance_name: instance_name.to_string(),
                 children: node.children.clone(),
@@ -412,144 +412,167 @@ fn snapshot_binary_model<'a>(
     }
 }
 
-fn snapshot_instances_from_imfs<'a>(
-    imfs: &'a Imfs,
-    imfs_path: &Path,
+fn snapshot_instances_from_file<'a>(
+    file: &'a ImfsFile,
     sync_point_metadata: &mut HashMap<PathBuf, SyncPointMetadata>,
 ) -> Result<Option<RbxSnapshotInstance<'a>>, SnapshotError> {
-    match imfs.get(imfs_path) {
-        Some(ImfsItem::File(file)) => {
-            let (instance_name, file_type) = match classify_file(file) {
-                Some(info) => info,
-                None => return Ok(None),
-            };
+    let (instance_name, file_type) = match classify_file(file) {
+        Some(info) => info,
+        None => return Ok(None),
+    };
 
-            let instance_name = if let Some(metadata) = sync_point_metadata.get(imfs_path) {
-                Cow::Owned(metadata.instance_name.clone())
-            } else {
-                Cow::Borrowed(instance_name)
-            };
+    let instance_name = if let Some(metadata) = sync_point_metadata.get(&file.path) {
+        Cow::Owned(metadata.instance_name.clone())
+    } else {
+        Cow::Borrowed(instance_name)
+    };
 
-            let class_name = match file_type {
-                FileType::ModuleScript => "ModuleScript",
-                FileType::ServerScript => "Script",
-                FileType::ClientScript => "LocalScript",
-                FileType::StringValue => "StringValue",
-                FileType::LocalizationTable => "LocalizationTable",
-                FileType::XmlModel => return snapshot_xml_model(instance_name, file),
-                FileType::BinaryModel => return snapshot_binary_model(instance_name, file),
-            };
+    let class_name = match file_type {
+        FileType::ModuleScript => "ModuleScript",
+        FileType::ServerScript => "Script",
+        FileType::ClientScript => "LocalScript",
+        FileType::StringValue => "StringValue",
+        FileType::LocalizationTable => "LocalizationTable",
+        FileType::XmlModel => return snapshot_xml_model(instance_name, file),
+        FileType::BinaryModel => return snapshot_binary_model(instance_name, file),
+    };
 
-            let contents = str::from_utf8(&file.contents)
-                .map_err(|inner| SnapshotError::Utf8Error {
-                    inner,
-                    path: imfs_path.to_path_buf(),
-                })?;
+    let contents = str::from_utf8(&file.contents)
+        .map_err(|inner| SnapshotError::Utf8Error {
+            inner,
+            path: file.path.clone(),
+        })?;
 
-            let mut properties = HashMap::new();
+    let mut properties = HashMap::new();
 
-            match file_type {
-                FileType::ModuleScript | FileType::ServerScript | FileType::ClientScript => {
-                    properties.insert(String::from("Source"), RbxValue::String {
-                        value: contents.to_string(),
-                    });
-                },
-                FileType::StringValue => {
-                    properties.insert(String::from("Value"), RbxValue::String {
-                        value: contents.to_string(),
-                    });
-                },
-                FileType::LocalizationTable => {
-                    let entries: Vec<LocalizationEntryJson> = csv::Reader::from_reader(contents.as_bytes())
-                        .deserialize()
-                        .map(|result| result.expect("Malformed localization table found!"))
-                        .map(LocalizationEntryCsv::to_json)
-                        .collect();
-
-                    let table_contents = serde_json::to_string(&entries)
-                        .expect("Could not encode JSON for localization table");
-
-                    properties.insert(String::from("Contents"), RbxValue::String {
-                        value: table_contents,
-                    });
-                },
-                FileType::XmlModel | FileType::BinaryModel => unreachable!(),
-            }
-
-            Ok(Some(RbxSnapshotInstance {
-                name: instance_name,
-                class_name: Cow::Borrowed(class_name),
-                properties,
-                children: Vec::new(),
-                source_path: Some(file.path.clone()),
-                metadata: None,
-            }))
+    match file_type {
+        FileType::ModuleScript | FileType::ServerScript | FileType::ClientScript => {
+            properties.insert(String::from("Source"), RbxValue::String {
+                value: contents.to_string(),
+            });
         },
-        Some(ImfsItem::Directory(directory)) => {
-            // TODO: Expand init support to handle server and client scripts
-            let init_path = directory.path.join(INIT_SCRIPT);
-            let init_server_path = directory.path.join(INIT_SERVER_SCRIPT);
-            let init_client_path = directory.path.join(INIT_CLIENT_SCRIPT);
-
-            let mut instance = if directory.children.contains(&init_path) {
-                snapshot_instances_from_imfs(imfs, &init_path, sync_point_metadata)?
-                    .expect("Could not snapshot instance from file that existed!")
-            } else if directory.children.contains(&init_server_path) {
-                snapshot_instances_from_imfs(imfs, &init_server_path, sync_point_metadata)?
-                    .expect("Could not snapshot instance from file that existed!")
-            } else if directory.children.contains(&init_client_path) {
-                snapshot_instances_from_imfs(imfs, &init_client_path, sync_point_metadata)?
-                    .expect("Could not snapshot instance from file that existed!")
-            } else {
-                RbxSnapshotInstance {
-                    class_name: Cow::Borrowed("Folder"),
-                    name: Cow::Borrowed(""),
-                    properties: HashMap::new(),
-                    children: Vec::new(),
-                    source_path: Some(directory.path.clone()),
-                    metadata: None,
-                }
-            };
-
-            for child_path in &directory.children {
-                match child_path.file_name().unwrap().to_str().unwrap() {
-                    INIT_SCRIPT | INIT_SERVER_SCRIPT | INIT_CLIENT_SCRIPT => {
-                        // The existence of files with these names modifies the
-                        // parent instance and is handled above, so we can skip
-                        // them here.
-                    },
-                    _ => {
-                        match snapshot_instances_from_imfs(imfs, child_path, sync_point_metadata)? {
-                            Some(child) => {
-                                instance.children.push(child);
-                            },
-                            None => {},
-                        }
-                    },
-                }
-            }
-
-            // We have to be careful not to lose instance names or children that
-            // are specified in the project manifest. We store them in
-            // sync_point_metadata when the original tree is constructed.
-            if let Some(metadata) = sync_point_metadata.get(&directory.path) {
-                instance.name = Cow::Owned(metadata.instance_name.clone());
-
-                // sync_point_metadata might be mutated while we're iterating
-                // over it, so let's clone our children out.
-                let children = metadata.children.clone();
-
-                for (child_name, child_node) in &children {
-                    construct_project_node(imfs, child_name, child_node, sync_point_metadata);
-                }
-            } else {
-                instance.name = Cow::Borrowed(directory.path
-                    .file_name().expect("Could not extract file name")
-                    .to_str().expect("Could not convert path to UTF-8"));
-            }
-
-            Ok(Some(instance))
+        FileType::StringValue => {
+            properties.insert(String::from("Value"), RbxValue::String {
+                value: contents.to_string(),
+            });
         },
-        None => Err(SnapshotError::DidNotExist(imfs_path.to_path_buf())),
+        FileType::LocalizationTable => {
+            let entries: Vec<LocalizationEntryJson> = csv::Reader::from_reader(contents.as_bytes())
+                .deserialize()
+                .map(|result| result.expect("Malformed localization table found!"))
+                .map(LocalizationEntryCsv::to_json)
+                .collect();
+
+            let table_contents = serde_json::to_string(&entries)
+                .expect("Could not encode JSON for localization table");
+
+            properties.insert(String::from("Contents"), RbxValue::String {
+                value: table_contents,
+            });
+        },
+        FileType::XmlModel | FileType::BinaryModel => unreachable!(),
     }
+
+    Ok(Some(RbxSnapshotInstance {
+        name: instance_name,
+        class_name: Cow::Borrowed(class_name),
+        properties,
+        children: Vec::new(),
+        source_path: Some(file.path.clone()),
+        metadata: None,
+    }))
+}
+
+fn snapshot_instances_from_directory<'a>(
+    imfs: &'a Imfs,
+    directory: &'a ImfsDirectory,
+    sync_point_metadata: &mut HashMap<PathBuf, SyncPointMetadata>,
+) -> Result<Option<RbxSnapshotInstance<'a>>, SnapshotError> {
+    // TODO: Expand init support to handle server and client scripts
+    let init_path = directory.path.join(INIT_SCRIPT);
+    let init_server_path = directory.path.join(INIT_SERVER_SCRIPT);
+    let init_client_path = directory.path.join(INIT_CLIENT_SCRIPT);
+
+    let mut instance = if directory.children.contains(&init_path) {
+        snapshot_instances_from_imfs(imfs, &init_path, sync_point_metadata)?
+            .expect("Could not snapshot instance from file that existed!")
+    } else if directory.children.contains(&init_server_path) {
+        snapshot_instances_from_imfs(imfs, &init_server_path, sync_point_metadata)?
+            .expect("Could not snapshot instance from file that existed!")
+    } else if directory.children.contains(&init_client_path) {
+        snapshot_instances_from_imfs(imfs, &init_client_path, sync_point_metadata)?
+            .expect("Could not snapshot instance from file that existed!")
+    } else {
+        RbxSnapshotInstance {
+            class_name: Cow::Borrowed("Folder"),
+            name: Cow::Borrowed(""),
+            properties: HashMap::new(),
+            children: Vec::new(),
+            source_path: Some(directory.path.clone()),
+            metadata: None,
+        }
+    };
+
+    for child_path in &directory.children {
+        match child_path.file_name().unwrap().to_str().unwrap() {
+            INIT_SCRIPT | INIT_SERVER_SCRIPT | INIT_CLIENT_SCRIPT => {
+                // The existence of files with these names modifies the
+                // parent instance and is handled above, so we can skip
+                // them here.
+            },
+            _ => {
+                match snapshot_instances_from_imfs(imfs, child_path, sync_point_metadata)? {
+                    Some(child) => {
+                        instance.children.push(child);
+                    },
+                    None => {},
+                }
+            },
+        }
+    }
+
+    // We have to be careful not to lose instance names that are specified in
+    // the project manifest. We store them in sync_point_metadata when the
+    // original tree is constructed.
+    instance.name = if let Some(metadata) = sync_point_metadata.get(&directory.path) {
+        Cow::Owned(metadata.instance_name.clone())
+    } else {
+        Cow::Borrowed(directory.path
+            .file_name().expect("Could not extract file name")
+            .to_str().expect("Could not convert path to UTF-8"))
+    };
+
+    Ok(Some(instance))
+}
+
+fn snapshot_instances_from_imfs<'a, 'b>(
+    imfs: &'a Imfs,
+    imfs_path: &'b Path,
+    sync_point_metadata: &'b mut HashMap<PathBuf, SyncPointMetadata>,
+) -> Result<Option<RbxSnapshotInstance<'a>>, SnapshotError> {
+    let instance = match imfs.get(imfs_path) {
+        Some(ImfsItem::File(file)) => snapshot_instances_from_file(file, sync_point_metadata)?,
+        Some(ImfsItem::Directory(directory)) => snapshot_instances_from_directory(imfs, directory, sync_point_metadata)?,
+        None => return Err(SnapshotError::DidNotExist(imfs_path.to_path_buf())),
+    };
+
+    let mut instance = match instance {
+        Some(instance) => instance,
+        None => return Ok(None),
+    };
+
+    // Additional children might be specified for this in stance in the sync
+    // point metadata!
+    if let Some(metadata) = sync_point_metadata.get(imfs_path) {
+        // sync_point_metadata might be mutated while we're iterating
+        // over it, so let's clone our children out.
+        let children = metadata.children.clone();
+
+        for (child_name, child_node) in &children {
+            let child = construct_project_node(imfs, Cow::Owned(child_name.to_owned()), child_node, sync_point_metadata);
+            instance.children.push(child);
+        }
+    }
+
+    Ok(Some(instance))
 }
