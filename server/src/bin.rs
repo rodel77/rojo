@@ -38,6 +38,7 @@ fn main() {
             (about: "Serves the project's files for use with the Rojo Studio plugin.")
             (@arg PROJECT: "Path to the project to serve. Defaults to the current directory.")
             (@arg port: --port +takes_value "The port to listen on. Defaults to 8000.")
+            (@arg dist: --dist +takes_value "The distribution mode (dev/prod).")
         )
 
         (@subcommand pack =>
@@ -82,7 +83,14 @@ fn main() {
                 }
             };
 
-            commands::serve(&project_path, verbose, port);
+            let dist = {
+                match sub_matches.value_of("dist") {
+                    Some(v) => v.to_string(),
+                    None => "development".to_string(),
+                }
+            };
+
+            commands::serve(&project_path, verbose, port, dist);
         },
         ("pack", _) => {
             eprintln!("'rojo pack' is not yet implemented!");

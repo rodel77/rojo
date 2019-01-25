@@ -11,12 +11,21 @@ use plugins::{DefaultPlugin, JsonModelPlugin, ScriptPlugin};
 use vfs::{VfsSession, VfsWatcher};
 use web;
 
-pub fn serve(project_path: &PathBuf, verbose: bool, port: Option<u64>) {
+pub fn serve(project_path: &PathBuf, verbose: bool, port: Option<u64>, dist: String) {
     let server_id = rand::random::<u64>();
 
     let project = match Project::load(project_path) {
-        Ok(project) => {
-            println!("Using project \"{}\" from {}", project.name, project_path.display());
+        Ok(mut project) => {
+            for (key, value) in &project.modules {
+                if value.mode=="development" && dist=="production" {
+                    continue;
+                }
+
+                project.partitions.insert(key.to_string(), value.clone());
+            }
+
+            println!("Using project \"{}\" in {} mode from {}", project.name, dist, project_path.display());
+
             project
         },
         Err(err) => {
@@ -49,6 +58,8 @@ pub fn serve(project_path: &PathBuf, verbose: bool, port: Option<u64>) {
         println!("This project has no partitions and will not do anything when served!");
         println!("This is usually a mistake -- edit rojo.json!");
         println!("");
+    } else {
+        println!("Serving {} partitions", project.partitions.len());
     }
 
     lazy_static! {

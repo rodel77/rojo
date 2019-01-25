@@ -50,6 +50,9 @@ pub struct ProjectPartition {
 
     /// A dot-separated route to a Roblox instance, relative to game.
     pub target: String,
+
+    /// production or development
+    pub mode: String,
 }
 
 /// Represents a project configured by a user for use with Rojo. Holds anything
@@ -62,6 +65,7 @@ pub struct ProjectPartition {
 pub struct Project {
     pub name: String,
     pub serve_port: u64,
+    pub modules: HashMap<String, ProjectPartition>,
     pub partitions: HashMap<String, ProjectPartition>,
 }
 
@@ -159,6 +163,7 @@ impl Default for Project {
         Project {
             name: "new-project".to_string(),
             serve_port: 8000,
+            modules: HashMap::new(),
             partitions: HashMap::new(),
         }
     }
