@@ -1,18 +1,21 @@
 {
   "name": "test-project",
   "servePort": 8001,
-  "partitions": {
+  "modules": {
     "src": {
       "path": "src",
-      "target": "ReplicatedFirst"
+      "target": "ReplicatedFirst",
+      "mode": "production"
     },
     "extra": {
       "path": "extra-script.lua",
-      "target": "ReplicatedStorage.ExtraScript"
+      "target": "ReplicatedStorage.ExtraScript",
+      "mode": "production"
     },
     "does-not-exist": {
       "path": "hahah",
-      "target": "ReplicatedStorage.Never"
+      "target": "ReplicatedStorage.Never",
+      "mode": "production"
     }
   }
 }
