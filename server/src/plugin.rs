@@ -5,6 +5,7 @@ use core::Route;
 pub enum TransformFileResult {
     Value(Option<RbxInstance>),
     Pass,
+    Discard,
 
     // TODO: Error case
 }
@@ -41,6 +42,7 @@ impl PluginChain {
             match plugin.transform_file(self, vfs_item) {
                 TransformFileResult::Value(rbx_item) => return rbx_item,
                 TransformFileResult::Pass => {},
+                TransformFileResult::Discard => return None,
             }
         }
 

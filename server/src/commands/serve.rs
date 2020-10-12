@@ -7,7 +7,7 @@ use rand;
 
 use project::{Project, ProjectLoadError};
 use plugin::{PluginChain};
-use plugins::{DefaultPlugin, JsonModelPlugin, ScriptPlugin};
+use plugins::{DefaultPlugin, JsonModelPlugin, ScriptPlugin, FilterPlugin};
 use vfs::{VfsSession, VfsWatcher};
 use web;
 
@@ -53,6 +53,7 @@ pub fn serve(project_path: &PathBuf, verbose: bool, port: Option<u64>) {
 
     lazy_static! {
         static ref PLUGIN_CHAIN: PluginChain = PluginChain::new(vec![
+            Box::new(FilterPlugin::new()),
             Box::new(ScriptPlugin::new()),
             Box::new(JsonModelPlugin::new()),
             Box::new(DefaultPlugin::new()),

@@ -51,7 +51,7 @@ impl Plugin for JsonModelPlugin {
 
                 let mut rbx_item = match self.transform_file(plugins, init_item) {
                     TransformFileResult::Value(Some(item)) => item,
-                    TransformFileResult::Value(None) | TransformFileResult::Pass => {
+                    TransformFileResult::Value(None) | TransformFileResult::Pass | TransformFileResult::Discard => {
                         eprintln!("Inconsistency detected in JsonModelPlugin!");
                         return TransformFileResult::Pass;
                     },
