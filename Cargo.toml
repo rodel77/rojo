@@ -37,7 +37,7 @@ name = "librojo"
 path = "src/lib.rs"
 
 [[bin]]
-name = "rojo"
+name = "rojo6"
 path = "src/bin.rs"
 
 [[bench]]

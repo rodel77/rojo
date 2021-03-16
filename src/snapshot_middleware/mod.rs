@@ -71,7 +71,9 @@ pub fn snapshot_from_vfs(
 
         snapshot_dir(context, vfs, path)
     } else {
-        if let Some(name) = match_file_name(path, ".lua") {
+        if let Some(_name) = match_file_name(path, ".spec.lua") {
+            return Ok(None);
+        } else if let Some(name) = match_file_name(path, ".lua") {
             match name {
                 // init scripts are handled elsewhere and should not turn into
                 // their own children.
